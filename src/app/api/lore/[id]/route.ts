@@ -1,9 +1,18 @@
 import { NextResponse } from "next/server";
+import { getAdminAccessFromCookieHeader } from "@/lib/server/moderation-auth";
 import { setLoreStatus } from "@/lib/server/store";
 
 export const runtime = "nodejs";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const adminAccess = getAdminAccessFromCookieHeader(request.headers.get("cookie"));
+  if (!adminAccess.configured && process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Lore moderation is not configured on this service." }, { status: 503 });
+  }
+  if (!adminAccess.authorized) {
+    return NextResponse.json({ error: "Streamer authorization is required to moderate lore." }, { status: 401 });
+  }
+
   try {
     const body = await request.json() as { status?: string };
     if (body.status !== "approved" && body.status !== "rejected") {

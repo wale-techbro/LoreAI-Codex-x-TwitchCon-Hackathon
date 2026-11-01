@@ -9,7 +9,7 @@ Twitch communities build shared history quickly, but newcomers often miss the re
 ## Features
 
 - Lorebook sections for approved memories and proposed entries.
-- Streamer approval and rejection for proposed lore.
+- Streamer approval and rejection for proposed lore, protected by a server-side secret and an HttpOnly session cookie.
 - Twitch `channel.chat.message` ingestion over EventSub WebSockets.
 - `!lore <moment>` chat commands create proposals; repeated phrases can also create proposals.
 - Idempotent proposal creation keyed by the saved Twitch message ID, using a database RPC and transaction lock.
@@ -33,7 +33,7 @@ Twitch chat
   -> Lorebook or OBS overlay
 ```
 
-The worker runs as a separate Node process. It validates the user access token, uses the validated Twitch user ID as the chat reader in the EventSub condition, and uses `TWITCH_BROADCASTER_USER_ID` for the channel. Supabase credentials are used only by server-side code. When Supabase is not configured, the app uses the ignored `data/local.json` demo store.
+The worker runs as a separate Node process. It validates the user access token, uses the validated Twitch user ID as the chat reader in the EventSub condition, and uses `TWITCH_BROADCASTER_USER_ID` for the channel. Supabase credentials are used only by server-side code. Local development uses the ignored `data/local.json` demo store; production requires Supabase configuration and fails clearly if it is missing.
 
 ## Technology stack
 
@@ -45,7 +45,7 @@ The worker runs as a separate Node process. It validates the user access token, 
 
 ## Prerequisites
 
-- Node.js 22.6 or newer
+- Node.js 22.23.4 (pinned in `package.json`)
 - pnpm
 - A Supabase project for shared persistence (optional for the local demo)
 - A Twitch Developer application and user access/refresh tokens for live chat ingestion (optional for the local demo)
@@ -66,14 +66,18 @@ Fill in only the values needed for the mode you want to run. `.env` is ignored b
 | `OPENAI_MODEL` | Optional model override | Optional. The code defaults to `gpt-6-luna`. |
 | `SUPABASE_URL` | Shared persistence | Project URL used by server-side database calls. |
 | `SUPABASE_SECRET_KEY` | Shared persistence | Server-only Supabase secret key; never expose it to browser code. |
+| `LORE_ADMIN_SECRET` | Production lore moderation | Required to unlock approve/reject controls. Use a random secret with at least 32 characters; it is never sent to the client as configuration. |
 | `TWITCH_CLIENT_ID` | EventSub worker | Twitch application client ID. |
 | `TWITCH_CLIENT_SECRET` | Token refresh | Twitch application secret used for refresh-token exchanges. |
 | `TWITCH_ACCESS_TOKEN` | EventSub worker | User access token for the authorized chat reader. |
 | `TWITCH_REFRESH_TOKEN` | Automatic token refresh | Refresh token paired with the user access token. Twitch rotates token pairs; the worker stores the latest pair in the ignored `.twitch-token-state.json`. |
 | `TWITCH_CHANNEL_LOGIN` | EventSub worker | Broadcaster channel login. |
 | `TWITCH_BROADCASTER_USER_ID` | EventSub worker and persistence | Broadcaster ID for the channel to read. |
+| `TWITCH_TOKEN_STATE_PATH` | Persistent worker token rotation | Optional path for the rotated access/refresh-token pair. Render example: `/var/data/.twitch-token-state.json`; local default remains `.twitch-token-state.json` in the project root. |
 
-If `.twitch-token-state.json` exists, its token pair takes precedence over the token values in `.env`. To switch accounts, stop the worker and handle the local token-state file securely before restarting.
+If the configured token-state file exists, its token pair takes precedence over the token values in `.env`. Twitch returns a new refresh token during refresh, and the worker saves the new pair at this path. On Render, attach a persistent disk mounted at `/var/data` to the worker and set `TWITCH_TOKEN_STATE_PATH=/var/data/.twitch-token-state.json`. To switch accounts, stop the worker and handle the token-state file securely before restarting.
+
+Set `NODE_ENV=production` on both Render services. The web service must have `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `LORE_ADMIN_SECRET`; add `OPENAI_API_KEY` only if model answers are wanted. The worker needs the Supabase variables and all Twitch variables above. Never add these secret values to the repository.
 
 ## Supabase setup
 
@@ -103,7 +107,7 @@ Start the Next.js frontend:
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Without Supabase configuration, the app uses local demo storage. Without `OPENAI_API_KEY`, matching approved lore is answered with its grounded summary.
+Open [http://localhost:3000](http://localhost:3000). In local development, the app uses local demo storage when Supabase is unconfigured and leaves moderation unlocked unless `LORE_ADMIN_SECRET` is set. Without `OPENAI_API_KEY`, matching approved lore is answered with its grounded summary.
 
 Start the EventSub worker in a second terminal after configuring Twitch and Supabase:
 
@@ -120,12 +124,13 @@ pnpm seed
 ## Lorebook and API
 
 - `/` — Lorebook with approved memories, a proposed-lore review queue, and the ask form.
-- `GET /api/lore` — returns lore entries, including proposed entries for review.
-- `PATCH /api/lore/:id` — approves or rejects an entry.
+- `GET /api/lore` — returns approved entries publicly; proposed and rejected entries require streamer authorization.
+- `POST /api/admin/session` — checks the streamer secret and sets an eight-hour HttpOnly moderation cookie. `DELETE` clears the session.
+- `PATCH /api/lore/:id` — approves or rejects an entry after streamer authorization.
 - `POST /api/ask` — searches approved lore, answers from relevant entries, and returns the source lore and chat messages.
 - `GET /api/status` — reports whether the app is using demo or Supabase storage and whether Twitch/OpenAI settings are present.
 
-The ask flow uses keyword matching over approved lore; it does not use embeddings or vector search. The model receives only the selected lore entries, and the API returns their sources.
+The ask flow uses keyword matching over approved lore; it does not use embeddings or vector search. The model receives only the selected lore entries, and the API returns their sources. In production, enter `LORE_ADMIN_SECRET` in the Lorebook's streamer access field to unlock the private review queue. The secret is checked server-side and is not returned or logged.
 
 ## OBS overlay
 
@@ -148,11 +153,11 @@ The overlay renders the answer and lore source titles. The Next.js app must be r
 ```sh
 pnpm typecheck
 pnpm lint
-node --experimental-strip-types --test tests/lore-proposal-idempotency.test.mjs
+node --experimental-strip-types --test tests/lore-proposal-idempotency.test.mjs tests/render-production-guards.test.mjs
 pnpm build
 ```
 
-The idempotency tests cover the serialized local fallback, the Supabase RPC request arguments, and the migration’s lock/source lookup. The RPC test uses a mock PostgREST response; it is not a live database concurrency test.
+The tests cover idempotent proposal creation, the Supabase RPC request arguments, production Supabase configuration guards, signed moderation sessions, and Twitch token rotation at a configurable path. The RPC test uses a mock PostgREST response; it is not a live database concurrency test.
 
 ## How Codex was used
 

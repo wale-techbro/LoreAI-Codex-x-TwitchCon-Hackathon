@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-const envNames = ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "TWITCH_BROADCASTER_USER_ID", "TWITCH_CHANNEL_LOGIN"];
+const envNames = ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "TWITCH_BROADCASTER_USER_ID", "TWITCH_CHANNEL_LOGIN", "NODE_ENV"];
 
 async function withIsolatedStore(configure, run) {
   const projectRoot = process.cwd();
@@ -16,6 +16,7 @@ async function withIsolatedStore(configure, run) {
   try {
     process.chdir(temporaryDirectory);
     for (const name of envNames) delete process.env[name];
+    process.env.NODE_ENV = "test";
     configure();
     const storeUrl = pathToFileURL(path.join(projectRoot, "src/lib/server/store.ts"));
     storeUrl.searchParams.set("test", `${Date.now()}-${Math.random()}`);

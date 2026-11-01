@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import type { LoreEntry } from "@/lib/types";
 
 type Status = { mode: string; twitchConfigured: boolean; aiConfigured: boolean };
+type AdminAccess = { configured: boolean; authorized: boolean };
 type Answer = {
   answer: string;
   sources: Array<{ id: string; title: string; summary: string; chat_messages: Array<{ user_name: string; message_text: string; sent_at: string }> }>;
@@ -14,8 +15,12 @@ type Answer = {
 
 const starterQuestions = ["What was the Banana Incident?", "Why is there a banana on the ceiling?", "What does chat want next?"];
 
-export function Lorebook({ initialEntries, status }: { initialEntries: LoreEntry[]; status: Status }) {
+export function Lorebook({ initialEntries, status, adminAccess }: { initialEntries: LoreEntry[]; status: Status; adminAccess: AdminAccess }) {
   const [entries, setEntries] = useState(initialEntries);
+  const [moderation, setModeration] = useState(adminAccess);
+  const [adminSecret, setAdminSecret] = useState("");
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [adminError, setAdminError] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,6 +46,53 @@ export function Lorebook({ initialEntries, status }: { initialEntries: LoreEntry
       setError(err instanceof Error ? err.message : "Couldn't reach LORE. Try again.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshEntries() {
+    const response = await fetch("/api/lore", { cache: "no-store" });
+    const data = await response.json() as { entries?: LoreEntry[]; error?: string };
+    if (!response.ok || !Array.isArray(data.entries)) throw new Error(data.error || "Couldn't refresh the lorebook.");
+    setEntries(data.entries);
+  }
+
+  async function unlockModeration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!adminSecret || adminBusy) return;
+    setAdminBusy(true);
+    setAdminError("");
+    const submittedSecret = adminSecret;
+    setAdminSecret("");
+    try {
+      const response = await fetch("/api/admin/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: submittedSecret })
+      });
+      const data = await response.json() as AdminAccess & { error?: string };
+      if (!response.ok) throw new Error(data.error || "Couldn't unlock streamer moderation.");
+      setModeration(data);
+      await refreshEntries();
+    } catch (err) {
+      setAdminError(err instanceof Error ? err.message : "Couldn't unlock streamer moderation.");
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+
+  async function lockModeration() {
+    setAdminBusy(true);
+    setAdminError("");
+    try {
+      const response = await fetch("/api/admin/session", { method: "DELETE" });
+      const data = await response.json() as AdminAccess & { error?: string };
+      if (!response.ok) throw new Error(data.error || "Couldn't lock streamer moderation.");
+      setModeration(data);
+      await refreshEntries();
+    } catch (err) {
+      setAdminError(err instanceof Error ? err.message : "Couldn't lock streamer moderation.");
+    } finally {
+      setAdminBusy(false);
     }
   }
 
@@ -93,8 +145,17 @@ export function Lorebook({ initialEntries, status }: { initialEntries: LoreEntry
     </section>
 
     <section className="review-section" id="review"><div className="section-heading"><div className="section-heading-main"><span className="section-index">03</span><div><span className="eyebrow">STREAMER’S DESK</span><h2>Make it official<span className="heading-period">.</span></h2></div></div><span className="review-count">{proposed.length.toString().padStart(2, "0")} WAITING</span></div>
-      {proposed.length > 0 ? <div className="proposal-list">{proposed.map((entry) => <article className="proposal" key={entry.id}><div className="proposal-marker">✳</div><div className="proposal-content"><div className="proposal-meta"><span>LORE CANDIDATE</span><span>·</span><time>{new Date(entry.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time></div><h3>{entry.title}</h3><p>{entry.summary}</p><span className="proposal-sources">{entry.source_message_ids.length} SOURCE MOMENTS ATTACHED</span></div><div className="proposal-actions"><button className="reject-button" disabled={busyId === entry.id} onClick={() => void moderate(entry.id, "rejected")}>Dismiss</button><button className="approve-button" disabled={busyId === entry.id} onClick={() => void moderate(entry.id, "approved")}>{busyId === entry.id ? "Saving…" : "Approve lore"} <span>↗</span></button></div></article>)}</div> : <div className="review-empty"><span>✓</span> You’re all caught up. New lore candidates appear here.</div>}
-      {rejected.length > 0 && <p className="dismissed-note">{rejected.length} dismissed candidate{rejected.length === 1 ? "" : "s"} hidden from the archive.</p>}
+      {!moderation.authorized && moderation.configured && <form className="ask-form" onSubmit={(event) => void unlockModeration(event)}>
+        <span className="ask-spark" aria-hidden="true">✳</span>
+        <label className="sr-only" htmlFor="admin-secret">Streamer moderation secret</label>
+        <input id="admin-secret" type="password" autoComplete="current-password" value={adminSecret} onChange={(event) => setAdminSecret(event.target.value)} placeholder="Enter streamer moderation secret" />
+        <button className="ask-button" type="submit" disabled={adminBusy || !adminSecret}>{adminBusy ? "Checking…" : "Unlock queue"}</button>
+      </form>}
+      {!moderation.authorized && !moderation.configured && <div className="review-empty">Streamer moderation is not configured on this service.</div>}
+      {moderation.authorized && moderation.configured && <div className="review-empty"><span>✓</span> Streamer review access is unlocked for this browser.<button className="reject-button" style={{ marginLeft: "auto" }} type="button" onClick={() => void lockModeration()} disabled={adminBusy}>{adminBusy ? "Locking…" : "Lock moderation"}</button></div>}
+      {adminError && <div className="inline-error" role="alert">{adminError}</div>}
+      {!moderation.authorized ? <div className="review-empty"><span>✓</span> Approved memories stay public. Streamer access is required to review proposed lore.</div> : proposed.length > 0 ? <div className="proposal-list">{proposed.map((entry) => <article className="proposal" key={entry.id}><div className="proposal-marker">✳</div><div className="proposal-content"><div className="proposal-meta"><span>LORE CANDIDATE</span><span>·</span><time>{new Date(entry.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time></div><h3>{entry.title}</h3><p>{entry.summary}</p><span className="proposal-sources">{entry.source_message_ids.length} SOURCE MOMENTS ATTACHED</span></div><div className="proposal-actions"><button className="reject-button" disabled={busyId === entry.id} onClick={() => void moderate(entry.id, "rejected")}>Dismiss</button><button className="approve-button" disabled={busyId === entry.id} onClick={() => void moderate(entry.id, "approved")}>{busyId === entry.id ? "Saving…" : "Approve lore"} <span>↗</span></button></div></article>)}</div> : <div className="review-empty"><span>✓</span> You’re all caught up. New lore candidates appear here.</div>}
+      {moderation.authorized && rejected.length > 0 && <p className="dismissed-note">{rejected.length} dismissed candidate{rejected.length === 1 ? "" : "s"} hidden from the archive.</p>}
     </section>
 
     <footer className="footer" id="setup"><div className="footer-brand"><span className="brand-mark">l.</span><span>LORE</span></div><span>Every community has a story. This one’s yours to keep.</span><div className="footer-status"><i className={status.aiConfigured ? "on" : ""} /> {status.aiConfigured ? "AI answers enabled" : "Grounded demo answers"}<span>·</span><i className={status.mode === "supabase" ? "on" : ""} /> {status.mode === "supabase" ? "Synced database" : "Local demo data"}</div></footer>

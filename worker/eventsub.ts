@@ -1,6 +1,6 @@
 import nextEnv from "@next/env";
 import WebSocket from "ws";
-import { createLoreProposal, saveChatMessage } from "../src/lib/server/store.ts";
+import { assertProductionSupabaseConfigured, createLoreProposal, saveChatMessage } from "../src/lib/server/store.ts";
 import { createTwitchAuth } from "./twitch-auth.ts";
 
 nextEnv.loadEnvConfig(process.cwd());
@@ -141,6 +141,7 @@ function connect(url = endpoint, migrated = false) {
 }
 
 async function main() {
+  assertProductionSupabaseConfigured();
   required("TWITCH_CLIENT_ID", clientId);
   required("TWITCH_CHANNEL_LOGIN", channelLogin);
   required("TWITCH_BROADCASTER_USER_ID", channelId);

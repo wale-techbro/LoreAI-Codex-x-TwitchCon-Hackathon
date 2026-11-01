@@ -11,10 +11,18 @@ let localQueue: Promise<void> = Promise.resolve();
 let supabaseClient: SupabaseClient | null = null;
 
 export function isSupabaseConfigured() {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
+  return Boolean(process.env.SUPABASE_URL?.trim() && process.env.SUPABASE_SECRET_KEY?.trim());
+}
+
+export function assertProductionSupabaseConfigured() {
+  if (process.env.NODE_ENV !== "production" || isSupabaseConfigured()) return;
+
+  const missing = ["SUPABASE_URL", "SUPABASE_SECRET_KEY"].filter((name) => !process.env[name]?.trim());
+  throw new Error(`Production requires ${missing.join(" and ")}. Configure the missing Supabase environment variables.`);
 }
 
 function supabase() {
+  assertProductionSupabaseConfigured();
   if (!isSupabaseConfigured()) return null;
   supabaseClient ??= createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false }
@@ -164,6 +172,7 @@ export async function getChatMessages(ids: string[]): Promise<ChatMessage[]> {
 }
 
 export async function getStatus() {
+  assertProductionSupabaseConfigured();
   return {
     mode: isSupabaseConfigured() ? "supabase" : "demo",
     twitchConfigured: Boolean(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_ACCESS_TOKEN && process.env.TWITCH_BROADCASTER_USER_ID),

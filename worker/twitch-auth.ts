@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 type TwitchValidation = {
   client_id: string;
@@ -23,13 +23,11 @@ type TokenState = {
   refreshToken: string;
 };
 
-const tokenStatePath = join(process.cwd(), ".twitch-token-state.json");
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-async function readSavedTokenState(): Promise<TokenState | null> {
+async function readSavedTokenState(tokenStatePath: string): Promise<TokenState | null> {
   try {
     const contents = await readFile(tokenStatePath, "utf8");
     const value: unknown = JSON.parse(contents);
@@ -49,9 +47,10 @@ async function readSavedTokenState(): Promise<TokenState | null> {
   }
 }
 
-async function saveTokenState(state: TokenState): Promise<void> {
+async function saveTokenState(tokenStatePath: string, state: TokenState): Promise<void> {
   const temporaryPath = `${tokenStatePath}.${randomUUID()}.tmp`;
   try {
+    await mkdir(dirname(tokenStatePath), { recursive: true });
     await writeFile(temporaryPath, JSON.stringify(state), { encoding: "utf8", mode: 0o600, flag: "wx" });
     await rename(temporaryPath, tokenStatePath);
   } catch (error) {
@@ -78,7 +77,8 @@ function parseRefreshResponse(value: unknown): TwitchTokenResponse {
 export async function createTwitchAuth() {
   const clientId = process.env.TWITCH_CLIENT_ID?.trim() ?? "";
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
-  const savedState = await readSavedTokenState();
+  const tokenStatePath = resolve(process.cwd(), process.env.TWITCH_TOKEN_STATE_PATH?.trim() || ".twitch-token-state.json");
+  const savedState = await readSavedTokenState(tokenStatePath);
   let accessToken = savedState?.accessToken ?? process.env.TWITCH_ACCESS_TOKEN?.trim() ?? "";
   let refreshToken = savedState?.refreshToken ?? process.env.TWITCH_REFRESH_TOKEN?.trim() ?? "";
   let refreshInProgress: Promise<void> | null = null;
@@ -89,7 +89,7 @@ export async function createTwitchAuth() {
   }
 
   async function persistCurrentTokens(): Promise<void> {
-    await saveTokenState({ accessToken, refreshToken });
+    await saveTokenState(tokenStatePath, { accessToken, refreshToken });
   }
 
   async function performTokenRefresh(): Promise<void> {
