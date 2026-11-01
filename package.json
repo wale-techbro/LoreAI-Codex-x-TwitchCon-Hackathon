@@ -1,0 +1,35 @@
+{
+  "name": "lore-twitch-memory",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.6.0" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "worker": "node --experimental-strip-types worker/eventsub.ts",
+    "seed": "node --experimental-strip-types scripts/seed.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.0",
+    "@next/env": "^15.5.3",
+    "next": "^15.5.3",
+    "openai": "^5.20.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.6",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.35.0",
+    "eslint-config-next": "^15.5.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
