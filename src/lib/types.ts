@@ -4,6 +4,7 @@ export type ChatMessage = {
   id: string;
   twitch_message_id: string;
   channel_id: string;
+  chatter_user_id?: string | null;
   user_login: string;
   user_name: string;
   message_text: string;

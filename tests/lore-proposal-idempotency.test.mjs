@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-const envNames = ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "TWITCH_BROADCASTER_USER_ID", "TWITCH_CHANNEL_LOGIN", "NODE_ENV"];
+const envNames = ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "NODE_ENV"];
 
 async function withIsolatedStore(configure, run) {
   const projectRoot = process.cwd();
@@ -39,7 +39,7 @@ async function withIsolatedStore(configure, run) {
 
 test("local fallback creates one proposal for duplicate deliveries of a Twitch message", async () => {
   await withIsolatedStore(() => {}, async (store) => {
-    const message = await store.saveChatMessage({
+    const message = await store.saveChatMessage("demo-channel", {
       twitch_message_id: "test-twitch-message-id",
       user_login: "test_viewer",
       user_name: "Test Viewer",
@@ -47,6 +47,7 @@ test("local fallback creates one proposal for duplicate deliveries of a Twitch m
       sent_at: new Date().toISOString()
     });
     const input = {
+      channelId: "demo-channel",
       title: "Idempotency test",
       summary: "A test proposal",
       source_message_ids: [message.id],
@@ -57,7 +58,7 @@ test("local fallback creates one proposal for duplicate deliveries of a Twitch m
       store.createLoreProposal(input),
       store.createLoreProposal(input)
     ]);
-    const entries = (await store.listLore()).filter((entry) => entry.title === input.title);
+    const entries = (await store.listLore("demo-channel")).filter((entry) => entry.title === input.title);
 
     assert.equal(first.id, duplicate.id);
     assert.equal(entries.length, 1);
@@ -69,8 +70,6 @@ test("Supabase proposal path calls the atomic RPC with twitch_message_id", async
   await withIsolatedStore(() => {
     process.env.SUPABASE_URL = "https://unit-test.supabase.invalid";
     process.env.SUPABASE_SECRET_KEY = "unit-test-key";
-    process.env.TWITCH_BROADCASTER_USER_ID = "unit-test-broadcaster";
-    process.env.TWITCH_CHANNEL_LOGIN = "unit_test_channel";
   }, async (store) => {
     const proposal = {
       id: "unit-test-lore-id",
@@ -103,6 +102,7 @@ test("Supabase proposal path calls the atomic RPC with twitch_message_id", async
     };
 
     const result = await store.createLoreProposal({
+      channelId: "unit-test-channel-id",
       title: proposal.title,
       summary: proposal.summary,
       source_message_ids: proposal.source_message_ids,
@@ -121,4 +121,14 @@ test("database migration serializes duplicate keys and reuses a proposal sourced
   assert.match(migration, /pg_advisory_xact_lock/);
   assert.match(migration, /twitch_message_id\s*=\s*p_twitch_message_id/);
   assert.match(migration, /source_message_ids\s+@>\s+array\[v_source_message_id\]/);
+});
+
+test("multi-creator migration preserves channels and existing lore while adding owner links", async () => {
+  const migration = await readFile("supabase/migrations/003_multi_creator.sql", "utf8");
+  assert.match(migration, /insert into public\.creator_accounts[\s\S]+from public\.channels/i);
+  assert.match(migration, /update public\.channels[\s\S]+set creator_account_id = creator\.id/i);
+  assert.match(migration, /references public\.creator_accounts\(id\)[\s\S]+on delete restrict/i);
+  assert.match(migration, /create table if not exists public\.creator_sessions/i);
+  assert.match(migration, /create table if not exists public\.asklore_requests/i);
+  assert.doesNotMatch(migration, /\b(drop|truncate|delete)\s+(table|from)\b/i);
 });

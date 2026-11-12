@@ -1,18 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import test from "node:test";
-import {
-  ADMIN_SESSION_TTL_SECONDS,
-  createAdminSessionToken,
-  getAdminAccess,
-  readAdminSessionCookie,
-  verifyAdminSessionToken,
-  visibleLoreEntries
-} from "../src/lib/server/moderation-auth.ts";
 import { assertProductionSupabaseConfigured } from "../src/lib/server/store.ts";
-import { createTwitchAuth } from "../worker/twitch-auth.ts";
+import { decryptTwitchToken, encryptTwitchToken } from "../src/lib/server/token-crypto.ts";
+import { createCreatorTwitchAuth, REQUIRED_TWITCH_SCOPES } from "../src/lib/server/twitch-oauth.ts";
 
 async function withEnvironment(values, run) {
   const originals = new Map(Object.keys(values).map((key) => [key, process.env[key]]));
@@ -30,40 +20,19 @@ async function withEnvironment(values, run) {
   }
 }
 
-test("moderation sessions are signed, expire, and do not expose the admin secret", async () => {
-  const secret = "test-only-admin-secret-with-more-than-32-characters";
-  const now = 1_800_000_000_000;
-  const token = createAdminSessionToken(secret, now);
-
-  assert.equal(verifyAdminSessionToken(token, secret, now), true);
-  assert.equal(verifyAdminSessionToken(token, "different-test-secret-with-more-than-32-characters", now), false);
-  assert.equal(verifyAdminSessionToken(token, secret, now + (ADMIN_SESSION_TTL_SECONDS + 1) * 1000), false);
-  assert.equal(verifyAdminSessionToken(`${token}tampered`, secret, now), false);
-  assert.equal(readAdminSessionCookie(`other=value; lore_admin_session=${token}`), token);
-  assert.equal(token.includes(secret), false);
-});
-test("production moderation requires a configured secret while local development stays unlocked", async () => {
-  await withEnvironment({ NODE_ENV: "production", LORE_ADMIN_SECRET: null }, async () => {
-    assert.deepEqual(getAdminAccess(null), { configured: false, authorized: false });
-    process.env.LORE_ADMIN_SECRET = "test-only-admin-secret-with-more-than-32-characters";
-    assert.deepEqual(getAdminAccess(null), { configured: true, authorized: false });
-    const cookie = createAdminSessionToken(process.env.LORE_ADMIN_SECRET);
-    assert.deepEqual(getAdminAccess(cookie), { configured: true, authorized: true });
-  });
-
-  await withEnvironment({ NODE_ENV: "development", LORE_ADMIN_SECRET: null }, async () => {
-    assert.deepEqual(getAdminAccess(null), { configured: false, authorized: true });
-  });
+test("Twitch OAuth requests reader and sender chat scopes", () => {
+  assert.deepEqual(REQUIRED_TWITCH_SCOPES, ["user:read:chat", "user:write:chat"]);
 });
 
-test("anonymous lore readers see approved entries but not moderation queue entries", () => {
-  const entries = [
-    { id: "approved", status: "approved" },
-    { id: "proposed", status: "proposed" },
-    { id: "rejected", status: "rejected" }
-  ];
-  assert.deepEqual(visibleLoreEntries(entries, false), [entries[0]]);
-  assert.deepEqual(visibleLoreEntries(entries, true), entries);
+test("creator Twitch tokens encrypt and decrypt with the configured 256-bit key", async () => {
+  const key = "0123456789abcdef".repeat(4);
+  await withEnvironment({ TWITCH_TOKEN_ENCRYPTION_KEY: key }, async () => {
+    const token = "unit-test-twitch-access-token";
+    const encrypted = encryptTwitchToken(token);
+    assert.notEqual(encrypted, token);
+    assert.equal(encrypted.includes(token), false);
+    assert.equal(decryptTwitchToken(encrypted), token);
+  });
 });
 
 test("production requires both Supabase variables and keeps the local mode available", async () => {
@@ -80,22 +49,31 @@ test("production requires both Supabase variables and keeps the local mode avail
   });
 });
 
-test("Twitch refresh saves the rotated token pair at the configured token-state path", async () => {
-  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "lore-twitch-token-state-"));
-  const originalCwd = process.cwd();
+test("Twitch refresh validates creator identity and persists the rotated encrypted token pair", async () => {
   const originalFetch = globalThis.fetch;
-  const envNames = ["NODE_ENV", "TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "TWITCH_TOKEN_STATE_PATH"];
+  const envNames = ["NODE_ENV", "TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "TWITCH_TOKEN_ENCRYPTION_KEY", "SUPABASE_URL", "SUPABASE_SECRET_KEY"];
   const originalEnv = new Map(envNames.map((name) => [name, process.env[name]]));
-  const statePath = path.join(temporaryDirectory, "render-disk", "token-state.json");
+  const encryptionKey = "abcdef0123456789".repeat(4);
+  let creator;
+  const rpcCalls = [];
 
   try {
-    await mkdir(path.dirname(statePath), { recursive: true });
-    await writeFile(statePath, JSON.stringify({ accessToken: "expired-test-access", refreshToken: "old-test-refresh" }), "utf8");
-    process.chdir(temporaryDirectory);
     process.env.NODE_ENV = "test";
     process.env.TWITCH_CLIENT_ID = "test-client-id";
     process.env.TWITCH_CLIENT_SECRET = "test-client-secret";
-    process.env.TWITCH_TOKEN_STATE_PATH = statePath;
+    process.env.TWITCH_TOKEN_ENCRYPTION_KEY = encryptionKey;
+    process.env.SUPABASE_URL = "https://unit-test.supabase.invalid";
+    process.env.SUPABASE_SECRET_KEY = "unit-test-service-key";
+    creator = {
+      accountId: "unit-test-creator-account",
+      twitchUserId: "unit-test-creator-id",
+      twitchLogin: "test_creator",
+      scopes: ["user:read:chat", "user:write:chat"],
+      expiresAt: null,
+      connectionVersion: 4,
+      accessTokenEncrypted: encryptTwitchToken("expired-test-access"),
+      refreshTokenEncrypted: encryptTwitchToken("old-test-refresh")
+    };
 
     globalThis.fetch = async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -105,9 +83,9 @@ test("Twitch refresh saves the rotated token pair at the configured token-state 
         assert.equal(authorization, "OAuth rotated-test-access");
         return new Response(JSON.stringify({
           client_id: "test-client-id",
-          user_id: "test-chat-reader-id",
-          login: "test_chat_reader",
-          scopes: ["user:read:chat"],
+          user_id: "unit-test-creator-id",
+          login: "test_creator",
+          scopes: ["user:read:chat", "user:write:chat"],
           expires_in: 3600
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -118,25 +96,32 @@ test("Twitch refresh saves the rotated token pair at the configured token-state 
           access_token: "rotated-test-access",
           refresh_token: "rotated-test-refresh",
           expires_in: 3600,
-          scope: ["user:read:chat"],
+          scope: ["user:read:chat", "user:write:chat"],
           token_type: "bearer"
         }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/rest/v1/rpc/update_twitch_creator_tokens")) {
+        const body = JSON.parse(String(init?.body));
+        rpcCalls.push(body);
+        return new Response(null, { status: 204 });
       }
       throw new Error("Unexpected request in token refresh test.");
     };
 
-    const twitchAuth = await createTwitchAuth();
+    const twitchAuth = await createCreatorTwitchAuth(creator);
     const validation = await twitchAuth.validateOrRefresh();
-    const saved = JSON.parse(await readFile(statePath, "utf8"));
-    assert.equal(validation.user_id, "test-chat-reader-id");
-    assert.deepEqual(saved, { accessToken: "rotated-test-access", refreshToken: "rotated-test-refresh" });
+    assert.equal(validation.user_id, "unit-test-creator-id");
+    assert.equal(await twitchAuth.getAccessToken(), "rotated-test-access");
+    assert.equal(rpcCalls.length, 1);
+    assert.equal(rpcCalls[0].p_creator_account_id, creator.accountId);
+    assert.equal(rpcCalls[0].p_connection_version, creator.connectionVersion);
+    assert.equal(decryptTwitchToken(rpcCalls[0].p_access_token_encrypted), "rotated-test-access");
+    assert.equal(decryptTwitchToken(rpcCalls[0].p_refresh_token_encrypted), "rotated-test-refresh");
   } finally {
     globalThis.fetch = originalFetch;
-    process.chdir(originalCwd);
     for (const [name, value] of originalEnv) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
-    await rm(temporaryDirectory, { recursive: true, force: true });
   }
 });
