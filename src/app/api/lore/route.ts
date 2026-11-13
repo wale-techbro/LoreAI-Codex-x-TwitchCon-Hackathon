@@ -12,8 +12,7 @@ export async function GET(request: Request) {
     }
     const entries = await listLore(creator?.channelId ?? "demo-channel");
     return NextResponse.json({ entries }, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not load lore.";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Could not load the lorebook." }, { status: 500 });
   }
 }

@@ -4,6 +4,7 @@ import { answerFromLore } from "../src/lib/server/answer.ts";
 import { assertProductionSupabaseConfigured, createLoreProposal, saveChatMessage } from "../src/lib/server/store.ts";
 import { claimAskLoreRequest, getConnectedCreatorChannels, type ConnectedCreatorChannel } from "../src/lib/server/creator-store.ts";
 import { createCreatorTwitchAuth } from "../src/lib/server/twitch-oauth.ts";
+import { logWorkerError, logWorkerWarning } from "./safe-logging.ts";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -68,7 +69,7 @@ class CreatorWorker {
     }
     this.validationTimer = setInterval(() => {
       void this.auth.validateOrRefresh().catch((error: unknown) => {
-        console.error(`Twitch token validation failed for @${this.creator.twitchLogin}:`, safeError(error));
+        logWorkerError("token_validation_failed", error, this.creator.accountId);
         this.stop();
       });
     }, 60 * 60 * 1000);
@@ -144,17 +145,17 @@ class CreatorWorker {
           ) {
             await this.onChat(message.payload.event, message.metadata?.message_timestamp ?? new Date().toISOString());
           } else if (messageType === "revocation") {
-            console.error(`Twitch revoked a chat subscription for @${this.creator.channelLogin}.`);
+            logWorkerError("eventsub_subscription_revoked", new Error("Subscription revoked."), this.creator.accountId);
           }
         } catch (error) {
-          console.error(`Could not process EventSub message for @${this.creator.channelLogin}:`, safeError(error));
+          logWorkerError("eventsub_message_failed", error, this.creator.accountId);
         }
       })();
     });
-    socket.on("error", (error) => console.error(`EventSub WebSocket error for @${this.creator.channelLogin}:`, error.message));
+    socket.on("error", (error) => logWorkerError("eventsub_socket_failed", error, this.creator.accountId));
     socket.on("close", () => {
       if (this.socket !== socket || this.stopped) return;
-      console.warn(`EventSub connection closed for @${this.creator.channelLogin}; reconnecting in 3 seconds.`);
+      logWorkerWarning("eventsub_connection_closed", this.creator.accountId);
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = setTimeout(() => this.connect(), 3000);
     });
@@ -182,13 +183,13 @@ class CreatorWorker {
         continue;
       }
       if (!response.ok) {
-        console.error(`Twitch chat reply failed for @${this.creator.channelLogin} (${response.status}).`);
+        logWorkerError("chat_reply_failed", new Error("Twitch returned a non-success status."), this.creator.accountId, response.status);
         return;
       }
       const value = await response.json() as { data?: Array<{ message_id?: string; is_sent?: boolean }> };
       const result = value.data?.[0];
       if (result?.is_sent === false) {
-        console.error(`Twitch did not send a chat reply for @${this.creator.channelLogin}.`);
+        logWorkerError("chat_reply_not_sent", new Error("Twitch did not send the chat reply."), this.creator.accountId);
         return;
       }
       if (result?.message_id) {
@@ -270,11 +271,6 @@ class CreatorWorker {
   }
 }
 
-function safeError(error: unknown) {
-  if (error instanceof Error) return error.message;
-  return "Unknown error.";
-}
-
 async function pollCreators() {
   if (pollInProgress) return;
   pollInProgress = true;
@@ -297,12 +293,12 @@ async function pollCreators() {
         handles.set(creator.accountId, handle);
       } catch (error) {
         handle.stop();
-        console.error(`Could not start EventSub for @${creator.channelLogin}:`, safeError(error));
+        logWorkerError("creator_start_failed", error, creator.accountId);
       }
     }
     if (creators.length === 0) console.log("No connected Twitch creators yet; worker is ready for creator OAuth.");
   } catch (error) {
-    console.error("Could not refresh connected Twitch creators:", safeError(error));
+    logWorkerError("creator_poll_failed", error);
   } finally {
     pollInProgress = false;
   }
@@ -317,7 +313,7 @@ async function main() {
 }
 
 void main().catch((error: unknown) => {
-  console.error("LORE EventSub worker could not start:", safeError(error));
+  logWorkerError("worker_start_failed", error);
   process.exitCode = 1;
 });
 

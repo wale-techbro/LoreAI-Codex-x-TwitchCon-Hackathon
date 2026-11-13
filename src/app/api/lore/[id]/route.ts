@@ -19,8 +19,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const entry = await setLoreStatus(channelId, id, body.status);
     if (!entry) return NextResponse.json({ error: "Lore entry not found." }, { status: 404 });
     return NextResponse.json({ entry }, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not update lore.";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Could not update the lore entry." }, { status: 500 });
   }
 }

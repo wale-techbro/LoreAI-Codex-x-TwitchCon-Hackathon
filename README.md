@@ -65,6 +65,7 @@ The local demo uses `data/local.json` when Supabase is not configured. `pnpm see
 | `TWITCH_CLIENT_ID` | Required | Required | Twitch Developer application ID. |
 | `TWITCH_CLIENT_SECRET` | Required | Required | Server-only Twitch app secret used for OAuth code exchange and token refresh. |
 | `TWITCH_REDIRECT_URI` | Required | Not used | Exact callback URL registered in the Twitch Developer Console, such as `https://<render-web-host>/api/auth/twitch/callback`. |
+| `APP_ORIGIN` | Required | Not used | Canonical web-app origin used for OAuth callback redirects. Use the same origin as `TWITCH_REDIRECT_URI`; production must use HTTPS. |
 | `TWITCH_TOKEN_ENCRYPTION_KEY` | Required | Required | A random 32-byte key encoded as 64 hexadecimal characters; encrypts stored Twitch access and refresh tokens. Keep the same key on both services and back it up securely. |
 | `OPENAI_API_KEY` | Optional | Optional | Enables model-generated grounded answers in the app and `!asklore`. |
 | `OPENAI_MODEL` | Optional | Optional | Optional model override; defaults to the model configured in the answer module. |
@@ -85,7 +86,7 @@ RLS is enabled on the tables. The server uses `SUPABASE_SECRET_KEY`; never use i
 
 ## Twitch application setup
 
-1. In the Twitch Developer Console, set the OAuth redirect URL to the exact `TWITCH_REDIRECT_URI` configured on the web service.
+1. Set `APP_ORIGIN` to the canonical web-app origin. Set `TWITCH_REDIRECT_URI` to that origin plus `/api/auth/twitch/callback`, then register that exact callback URL in the Twitch Developer Console.
 2. Configure `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` on both the web service and worker.
 3. The creator uses **Connect with Twitch** in LORE. The Authorization Code Grant requests `user:read:chat` and `user:write:chat`. Twitch’s callback state is checked before exchanging the code, and the returned token is validated for the correct app, identity, and scopes.
 4. The app encrypts and stores the access/refresh token pair in Supabase. Twitch refresh-token rotation is persisted; disconnect revokes the Twitch token and preserves channel history and lore.
@@ -140,14 +141,14 @@ Build: pnpm install --frozen-lockfile
 Start: pnpm worker
 ```
 
-Both services use Node.js 22.23.4 and the same `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, Twitch app credentials, and `TWITCH_TOKEN_ENCRYPTION_KEY`. The web service also needs `TWITCH_REDIRECT_URI`. The worker stores refreshed token pairs in Supabase, so it does not depend on a persistent local token file or Render disk. Keep exactly one worker instance to avoid opening duplicate socket sets.
+Both services use Node.js 22.23.4 and the same `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, Twitch app credentials, and `TWITCH_TOKEN_ENCRYPTION_KEY`. The web service also needs `TWITCH_REDIRECT_URI` and `APP_ORIGIN`. The worker stores refreshed token pairs in Supabase, so it does not depend on a persistent local token file or Render disk. Keep exactly one worker instance to avoid opening duplicate socket sets.
 
 ## Checks
 
 ```sh
 pnpm typecheck
 pnpm lint
-node --experimental-strip-types --test tests/*.test.mjs
+pnpm test
 pnpm build
 ```
 

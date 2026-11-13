@@ -23,8 +23,7 @@ export async function POST(request: Request) {
 
     const result = await answerFromLore(channelId, body.question.trim());
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "LORE couldn't answer just now.";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "LORE couldn't answer just now." }, { status: 500 });
   }
 }

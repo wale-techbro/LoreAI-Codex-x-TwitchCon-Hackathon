@@ -24,7 +24,8 @@ test("seeded demo answers from relevant approved lore and returns sources", asyn
     assert.match(grounded.answer, /banana/i);
     assert.equal(grounded.sources.length, 1);
     assert.equal(grounded.sources[0].title, "The Banana Incident");
-    assert.ok(grounded.sources[0].chat_messages.length > 0);
+    assert.deepEqual(Object.keys(grounded.sources[0]).sort(), ["created_at", "id", "summary", "title"]);
+    assert.doesNotMatch(JSON.stringify(grounded), /chat_messages|user_name|message_text/);
 
     const unknown = await answerFromLore("demo-channel", "What happened to the moon cheese?");
     assert.equal(unknown.answer, "I don't know yet.");
