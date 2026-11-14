@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { NextResponse } from "next/server";
 import { createCreatorSession, CREATOR_SESSION_COOKIE, CREATOR_SESSION_TTL_SECONDS } from "@/lib/server/creator-auth";
 import { exchangeTwitchAuthorizationCode } from "@/lib/server/twitch-oauth";
