@@ -1,14 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { REQUIRED_TWITCH_SCOPES } from "@/lib/server/twitch-oauth";
+import { getTwitchCallbackUri } from "@/lib/server/app-origin";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   const clientId = process.env.TWITCH_CLIENT_ID?.trim();
-  const redirectUri = process.env.TWITCH_REDIRECT_URI?.trim();
-  if (!clientId || !redirectUri) {
-    return NextResponse.json({ error: "Twitch OAuth is not configured. Set TWITCH_CLIENT_ID and TWITCH_REDIRECT_URI." }, { status: 503 });
+  let redirectUri: string;
+  try {
+    redirectUri = getTwitchCallbackUri();
+  } catch {
+    return NextResponse.json({ error: "Twitch OAuth is not configured correctly." }, { status: 503 });
+  }
+  if (!clientId) {
+    return NextResponse.json({ error: "Twitch OAuth is not configured correctly." }, { status: 503 });
   }
 
   const state = randomBytes(32).toString("base64url");

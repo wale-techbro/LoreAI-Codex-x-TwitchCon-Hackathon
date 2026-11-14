@@ -13,8 +13,7 @@ export async function GET(request: Request) {
       creatorLogin: creator?.twitchLogin ?? null,
       channelLogin: creator?.channelLogin ?? null
     }, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Service configuration is incomplete.";
-    return NextResponse.json({ error: message }, { status: 503 });
+  } catch {
+    return NextResponse.json({ error: "Could not load service status." }, { status: 503 });
   }
 }

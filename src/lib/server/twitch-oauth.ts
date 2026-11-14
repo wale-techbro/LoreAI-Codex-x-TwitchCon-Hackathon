@@ -1,6 +1,7 @@
 import type { CreatorTokenRecord } from "./creator-store.ts";
 import { connectTwitchCreator, persistTwitchCreatorTokens } from "./creator-store.ts";
 import { decryptTwitchToken, encryptTwitchToken } from "./token-crypto.ts";
+import { getTwitchCallbackUri } from "./app-origin.ts";
 
 export const REQUIRED_TWITCH_SCOPES = ["user:read:chat", "user:write:chat"] as const;
 
@@ -23,11 +24,10 @@ type TwitchValidation = {
 function appConfig(requireRedirectUri = false) {
   const clientId = process.env.TWITCH_CLIENT_ID?.trim() ?? "";
   const clientSecret = process.env.TWITCH_CLIENT_SECRET?.trim() ?? "";
-  const redirectUri = process.env.TWITCH_REDIRECT_URI?.trim() ?? "";
+  const redirectUri = requireRedirectUri ? getTwitchCallbackUri() : "";
   const missing = [
     ["TWITCH_CLIENT_ID", clientId],
-    ["TWITCH_CLIENT_SECRET", clientSecret],
-    ...(requireRedirectUri ? [["TWITCH_REDIRECT_URI", redirectUri] as [string, string]] : [])
+    ["TWITCH_CLIENT_SECRET", clientSecret]
   ].filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) throw new Error(`Twitch OAuth is not configured. Set ${missing.join(", ")}.`);
   return { clientId, clientSecret, redirectUri };

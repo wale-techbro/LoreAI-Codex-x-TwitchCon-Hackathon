@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { getChatMessages, getApprovedLore } from "./store.ts";
+import { getApprovedLore } from "./store.ts";
 import type { LoreEntry } from "../types.ts";
 
 const stopWords = new Set(["what", "was", "the", "is", "a", "an", "of", "in", "on", "to", "for", "and", "with", "who", "when", "where", "how", "tell", "me", "about", "this", "that", "it", "do", "does", "did"]);
@@ -34,18 +34,11 @@ export async function answerFromLore(channelId: string, question: string, unknow
   }
 
   const matchedEntries = relevant.map(({ entry }) => entry);
-  const sourceMessages = await getChatMessages(channelId, [...new Set(matchedEntries.flatMap((entry) => entry.source_message_ids))]);
-  const sourceMap = new Map(sourceMessages.map((message) => [message.id, message]));
   const sources = matchedEntries.map((entry) => ({
     id: entry.id,
     title: entry.title,
     summary: entry.summary,
-    created_at: entry.created_at,
-    chat_messages: entry.source_message_ids.map((id) => sourceMap.get(id)).filter((message) => message !== undefined).map((message) => ({
-      user_name: message.user_name,
-      message_text: message.message_text,
-      sent_at: message.sent_at
-    }))
+    created_at: entry.created_at
   }));
 
   if (!process.env.OPENAI_API_KEY) {
